@@ -81,6 +81,12 @@ copy config.example.json config.json
 | `cleanup_enabled` | `true` | LLM 润色开关（关 = 原始转写，无需 Key） |
 | `confirm_before_insert` | `false` | `true` = 插入前弹可编辑确认窗 |
 | `streaming_partial` | `true` | 录音时实时转写预览 |
+| `vocabulary` | `[]` | 让这些词识别更准，如 `["CLAUDE.md","agent"]`（设置窗里也能填）|
+| `insert_suffix` | `""` | 每次插入后追加（`" "`空格 / `"\n"`换行；聊天框慎用换行=可能发送）|
+| `restore_clipboard` | `true` | 插入后恢复你原来的剪贴板内容 |
+| `max_record_seconds` | `120` | 录音超过 N 秒自动停（0=不限）|
+| `paste_delay_ms` | `120` | 焦点/粘贴间隔；慢应用粘贴丢字就调大 |
+| `llm_timeout_seconds` | `30` | 润色请求超时 |
 | `llm_base_url` | `https://api.deepseek.com` | 任意 OpenAI 兼容 base URL |
 | `llm_model` | `deepseek-v4-flash` | 该端点的模型名 |
 | `hf_endpoint` | `https://huggingface.co` | 模型下载源 —— **中国大陆改成 `https://hf-mirror.com`** |

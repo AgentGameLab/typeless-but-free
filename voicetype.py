@@ -62,6 +62,12 @@ DEFAULTS = {
     "llm_api_key": "",                            # 填你自己的 key（留空且无 env → 跳过润色）
     "llm_api_key_file": "",                       # 可选：从某个 .env 文件读 *_API_KEY
     "min_record_seconds": 0.3,            # 短于此忽略（防误触）
+    "max_record_seconds": 120,            # 录音超过此秒数自动停（防 toggle 模式忘关；0=不限）
+    "insert_suffix": "",                  # 插入后自动追加（" "空格 / "\n"换行；聊天框慎用换行=可能发送）
+    "restore_clipboard": True,            # 插入后恢复你原来的剪贴板内容
+    "paste_delay_ms": 120,                # 焦点切换/粘贴间隔（慢应用粘贴丢字可调大）
+    "llm_timeout_seconds": 30,            # 润色请求超时（本地 LLM / 网络差可调大）
+    "silence_rms_threshold": 0.005,       # 没识别到内容且音量低于此 → 提示检查麦克风
     "beam_size": 1,                       # 1=最快；想更准可调 5（慢一点）
     "confirm_before_insert": False,       # False=直接插入；True=弹窗确认再插
     "self_download": True,                # 用 requests 直连下载模型（绕开 hf hub 的 Xet 0 字节 bug）
@@ -84,7 +90,7 @@ def load_config():
     cfg = dict(DEFAULTS)
     if CONFIG_PATH.exists():
         try:
-            user = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            user = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))  # 容忍记事本存的 BOM
             cfg.update(user)
         except Exception as e:
             print(f"[warn] config.json 解析失败，用默认值: {e}")
@@ -309,7 +315,7 @@ def cleanup_text(raw, cfg, api_key):
                     {"role": "user", "content": raw},
                 ],
             },
-            timeout=30,
+            timeout=cfg.get("llm_timeout_seconds", 30),
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
@@ -439,15 +445,22 @@ class App:
         print("[rec] ●录音中…")
         self.ui_queue.put(("status", "录音中…", self.C["red"]))
         self.ui_queue.put(("partial", ""))
-        if self.cfg.get("streaming_partial", True):
-            self._stream_stop = False
-            threading.Thread(target=self._stream_loop, daemon=True).start()
+        self._stream_stop = False
+        threading.Thread(target=self._stream_loop, daemon=True).start()
 
     def _stream_loop(self):
-        """录音中每 ~0.6s 拿已录音频跑一次 turbo，实时吐 partial 文字。"""
+        """录音监视线程：到最大时长自动停；开了 streaming_partial 时顺便实时转写预览。"""
         sr = self.cfg["sample_rate"]
+        maxs = self.cfg.get("max_record_seconds", 0) or 0
+        stream_on = self.cfg.get("streaming_partial", True)
         while not self._stream_stop and self.recorder.recording:
             time.sleep(0.6)
+            if maxs and (time.time() - self._t0) >= maxs:
+                print(f"[rec] 到最大录音时长 {maxs}s，自动停止")
+                self._stop_rec()
+                break
+            if not stream_on:
+                continue
             frames = list(self.recorder.frames)
             if not frames:
                 continue
@@ -562,16 +575,33 @@ class App:
         self.ui_queue.put(msg)
 
     def _insert(self, text, hwnd):
-        if not text.strip():
+        if not (text or "").strip():
             return
+        text = text + self.cfg.get("insert_suffix", "")
+        delay = max(0, self.cfg.get("paste_delay_ms", 120)) / 1000.0
+        old_clip = None
+        if self.cfg.get("restore_clipboard", True):
+            try:
+                old_clip = pyperclip.paste()
+            except Exception:
+                old_clip = None
         pyperclip.copy(text)
-        time.sleep(0.1)
+        time.sleep(delay)
         set_foreground_window(hwnd)
-        time.sleep(0.1)
+        time.sleep(delay)
         with self.kbctl.pressed(PASTE_KEY):
             self.kbctl.press("v")
             self.kbctl.release("v")
         print("[ok] 已插入")
+        if old_clip is not None:  # 等粘贴完成后再恢复你原来的剪贴板
+            threading.Timer(0.4, lambda: self._safe_clip(old_clip)).start()
+
+    @staticmethod
+    def _safe_clip(val):
+        try:
+            pyperclip.copy(val)
+        except Exception:
+            pass
 
     def _process(self, audio):
         try:
@@ -580,8 +610,12 @@ class App:
                 raw, lang = self.transcriber.transcribe(audio, self._context, self._vocab_str or None)
             print(f"[stt] [{lang}] {raw}")
             if not raw:
-                self._post(("status", "没听清，再说一次", self.C["sub"]))
-                self._post(("hide", 1200))
+                rms = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
+                if rms < self.cfg.get("silence_rms_threshold", 0.005):
+                    self._post(("status", "没听到声音，检查麦克风", self.C["red"]))
+                else:
+                    self._post(("status", "没听清，再说一次", self.C["sub"]))
+                self._post(("hide", 1500))
                 return
             self._post(("partial", raw))  # 松手即回填完整转写，补上实时预览漏掉的尾巴
             self._context = (raw or "")[-180:]  # 带上下文给下次识别提准
@@ -654,12 +688,34 @@ class App:
             except Exception:
                 self._quit_app()
 
+        def on_settings(icon, item):
+            try:
+                self.root.after(0, self._reopen_settings)
+            except Exception:
+                self._reopen_settings()
+
         menu = pystray.Menu(
             pystray.MenuItem(APP_NAME, None, enabled=False),
+            pystray.MenuItem("设置 Settings", on_settings),
             pystray.MenuItem("退出 Quit", on_quit),
         )
         self._tray = pystray.Icon("typeless", img, APP_NAME, menu)
         threading.Thread(target=self._tray.run, daemon=True).start()
+
+    def _spawn_self(self, extra_args=None):
+        import subprocess
+        args = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, os.path.abspath(__file__)]
+        if extra_args:
+            args += extra_args
+        try:
+            subprocess.Popen(args, close_fds=True)
+        except Exception as e:
+            print("[tray] 重启失败:", e, flush=True)
+
+    def _reopen_settings(self):
+        # 拉起带 --settings 的新进程（复用设置窗），再退出当前进程；存盘后用新配置全新启动
+        self._spawn_self(["--settings"])
+        self._quit_app()
 
     def _quit_app(self):
         try:
@@ -1203,9 +1259,7 @@ def main():
     need_setup = force_settings or (not config_existed) or (cfg.get("cleanup_enabled", True) and not api_key)
     if need_setup:
         result = run_settings(cfg)
-        if result is None and force_settings:
-            return
-        if result is not None:
+        if result is not None:   # 保存了就用新配置；取消则沿用现有配置继续启动
             cfg = result
             api_key = load_api_key(cfg)
 

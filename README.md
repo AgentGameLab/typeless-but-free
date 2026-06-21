@@ -77,6 +77,12 @@ transcript inserted directly (keeps filler words, but nothing leaves your machin
 | `cleanup_enabled` | `true` | LLM cleanup on/off (off = raw transcript, no key needed) |
 | `confirm_before_insert` | `false` | `true` = show an editable popup before inserting |
 | `streaming_partial` | `true` | live transcription while recording |
+| `vocabulary` | `[]` | terms to recognize more reliably, e.g. `["CLAUDE.md","agent"]` (also editable in the settings UI) |
+| `insert_suffix` | `""` | text appended after each insert (`" "` space / `"\n"` newline; avoid newline in chat apps) |
+| `restore_clipboard` | `true` | restore your previous clipboard after inserting |
+| `max_record_seconds` | `120` | auto‑stop recording after N seconds (0 = no limit) |
+| `paste_delay_ms` | `120` | focus/paste delay; raise if a slow app drops the paste |
+| `llm_timeout_seconds` | `30` | cleanup request timeout |
 | `llm_base_url` | `https://api.deepseek.com` | any OpenAI‑compatible base URL |
 | `llm_model` | `deepseek-v4-flash` | model name on that endpoint |
 | `hf_endpoint` | `https://huggingface.co` | model download host — **set to `https://hf-mirror.com` in mainland China** |
