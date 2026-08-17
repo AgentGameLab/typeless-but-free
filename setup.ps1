@@ -1,5 +1,5 @@
 # VoiceType 一键安装（Windows / PowerShell）
-# 用法：在 E:\Project\voicetype 下右键“用 PowerShell 运行”，或：
+# 用法：在项目根目录下右键“用 PowerShell 运行”，或：
 #   powershell -ExecutionPolicy Bypass -File .\setup.ps1
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
